@@ -1,0 +1,27 @@
+# A deliberately eager policy used to exercise truncation and vacuum boundaries.
+lake_root: lakewatch/fixtures/lake
+ledger_path: .lakewatch/ledger-aggressive.sqlite3
+reports_dir: reports/aggressive
+host: 127.0.0.1
+port: 7312
+
+policy:
+  small_file_bytes: 65536
+  max_files_per_partition: 3
+  max_files_listed: 20
+  max_actions: 100
+  compact_target_bytes: 262144
+  compact_max_inputs: 6
+  compact_small_files: true
+  vacuum_expired: true
+  repair_missing: true
+  retention:
+    keep_last_snapshots: 1
+    keep_days: 7
+    as_of: "2025-03-10T00:00:00Z"
+  tables:
+    customers:
+      compact_small_files: false
+    events:
+      retention:
+        keep_days: 14

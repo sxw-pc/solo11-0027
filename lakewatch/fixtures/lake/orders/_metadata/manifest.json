@@ -1,0 +1,146 @@
+{
+  "files": [
+    {
+      "bytes": 1828,
+      "path": "region=eu/part-0000.parquet",
+      "rows": 8,
+      "sha256": "2ff0e8eff97dd232479726a7e628657bfb90171c32e6ecffafa158eefb35d238"
+    },
+    {
+      "bytes": 1864,
+      "path": "region=eu/part-0001.parquet",
+      "rows": 9,
+      "sha256": "b8f630823c54828c58c13e540709d759b007c501568bea47e75d8f6ad4b494c3"
+    },
+    {
+      "bytes": 1884,
+      "path": "region=eu/part-0002.parquet",
+      "rows": 10,
+      "sha256": "0a851d819d8a8037998beaf809fb4b44648e536e97958a43072ce81f674705ac"
+    },
+    {
+      "bytes": 1904,
+      "path": "region=eu/part-0003.parquet",
+      "rows": 11,
+      "sha256": "318fc7ef1701d71e36998884447972b806107d72ffb7756888b5221b58b3436f"
+    },
+    {
+      "bytes": 1837,
+      "path": "region=skew/part-0000.parquet",
+      "rows": 8,
+      "sha256": "3cfbb6984ccffc75a597cf985c32c08458abd414aa132a56734b007357ee3927"
+    },
+    {
+      "bytes": 1875,
+      "path": "region=skew/part-0001.parquet",
+      "rows": 9,
+      "sha256": "62a0d348c3ef7f310cdb70c1d34dad9b5ac99b50f165059db936b1e2c65eb61c"
+    },
+    {
+      "bytes": 1894,
+      "path": "region=skew/part-0002.parquet",
+      "rows": 10,
+      "sha256": "0cd605e0816a5e7c188a060dd9013c2f6ffaf10c613d5e6398a12c680b475099"
+    },
+    {
+      "bytes": 1912,
+      "path": "region=skew/part-0003.parquet",
+      "rows": 11,
+      "sha256": "94dc089c3491fddc27522ac59dc8cb57e7f9aafbf9678d4f2d65571808533fe5"
+    },
+    {
+      "bytes": 1835,
+      "path": "region=skew/part-0004.parquet",
+      "rows": 8,
+      "sha256": "c2d43d81bc1d5e23f4af698d929dac105cab4dc8bca68bb256449d4c2aeb5722"
+    },
+    {
+      "bytes": 1873,
+      "path": "region=skew/part-0005.parquet",
+      "rows": 9,
+      "sha256": "5b1c08efe632367b7325741ffb2d594139ec7850d9fe6194e3c5e86cfad1f729"
+    },
+    {
+      "bytes": 1895,
+      "path": "region=skew/part-0006.parquet",
+      "rows": 10,
+      "sha256": "ee98f04122ebc919f667c342487396be5ba11070a81f2c46be7c441968c97842"
+    },
+    {
+      "bytes": 1914,
+      "path": "region=skew/part-0007.parquet",
+      "rows": 11,
+      "sha256": "60dde60650e601be425488dd57454f763e49cca1aedc1865c4bb6120ba687f6b"
+    },
+    {
+      "bytes": 1836,
+      "path": "region=skew/part-0008.parquet",
+      "rows": 8,
+      "sha256": "9ad5f4fd83d774f0cc38d1b3c8220e8d76b1a57e30a0716f4c50cb1c40de3e8b"
+    },
+    {
+      "bytes": 1877,
+      "path": "region=skew/part-0009.parquet",
+      "rows": 9,
+      "sha256": "b78c67a9bd75b769cf7f8905aa41cdc5e6b980974be7eefb475b50bc9214031d"
+    },
+    {
+      "bytes": 1894,
+      "path": "region=skew/part-0010.parquet",
+      "rows": 10,
+      "sha256": "891a145789fe631bf56bbd4fa69a7bc2078e2581fe71aec7d6dec22be0fd700c"
+    },
+    {
+      "bytes": 1914,
+      "path": "region=skew/part-0011.parquet",
+      "rows": 11,
+      "sha256": "64c00c2c5f39324ef9f7eb511d2257ac5ddf63641c089ae0a78ef8420ba79a37"
+    },
+    {
+      "bytes": 1836,
+      "path": "region=skew/part-0012.parquet",
+      "rows": 8,
+      "sha256": "64f646527da26d11bce04022c9aefcf86c0d25a4b8548b174981e8f550def90f"
+    },
+    {
+      "bytes": 1875,
+      "path": "region=skew/part-0013.parquet",
+      "rows": 9,
+      "sha256": "30168dea6e419cb03013b21067dc5eaef5d73871f6eb7fd350e88ced514b4d44"
+    },
+    {
+      "bytes": 1823,
+      "path": "region=us/part-0000.parquet",
+      "rows": 8,
+      "sha256": "f05183210ae0275b64866f84695f99897a77593cf8df09481af2d5d94122bde1"
+    },
+    {
+      "bytes": 1865,
+      "path": "region=us/part-0001.parquet",
+      "rows": 9,
+      "sha256": "73f8d9090341a9301d2cef21ee749e4255332ab508e9f12bc794a7c28a39c9ed"
+    },
+    {
+      "bytes": 1883,
+      "path": "region=us/part-0002.parquet",
+      "rows": 10,
+      "sha256": "001329648ca18be14a0cfdc3d55321a03255c69fc1ba278e0b8ee58e3452115b"
+    },
+    {
+      "bytes": 1907,
+      "path": "region=us/part-0003.parquet",
+      "rows": 11,
+      "sha256": "d832fb674042be8f2243a8e6ad00f52baefad7b1d9f79db02c0cc92e2781dfef"
+    },
+    {
+      "bytes": 1824,
+      "path": "region=us/part-0004.parquet",
+      "rows": 8,
+      "sha256": "6259c034f332ad12bf941c3e8fd3ec626ab5d0d38d19cab889a81a70b97e887b"
+    }
+  ],
+  "format": "lakewatch.manifest/1",
+  "generation": 3,
+  "table": "orders",
+  "updated_at": "2025-03-01T00:00:00Z"
+}

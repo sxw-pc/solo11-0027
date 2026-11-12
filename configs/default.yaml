@@ -1,0 +1,27 @@
+# Local-only application and maintenance policy for the sample lake.
+lake_root: lakewatch/fixtures/lake
+ledger_path: .lakewatch/ledger.sqlite3
+reports_dir: reports
+host: 127.0.0.1
+port: 7311
+
+policy:
+  small_file_bytes: 4096
+  max_files_per_partition: 12
+  max_files_listed: 8
+  max_actions: 24
+  compact_target_bytes: 65536
+  compact_max_inputs: 12
+  compact_small_files: true
+  vacuum_expired: true
+  repair_missing: true
+  retention:
+    keep_last_snapshots: 2
+    keep_days: 30
+    as_of: "2025-03-10T00:00:00Z"
+  tables:
+    orders:
+      max_files_per_partition: 8
+      compact_max_inputs: 8
+    events:
+      max_files_listed: 6

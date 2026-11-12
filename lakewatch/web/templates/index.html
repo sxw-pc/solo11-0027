@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>湖岸小驻 · Lakewatch</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">LOCAL LAKE MAINTENANCE</p>
+      <h1>湖岸小驻 <span>Lakewatch</span></h1>
+    </div>
+    <div class="status">
+      <span class="dot"></span> 完全离线 · {{ version }}
+      <button id="refresh" type="button">刷新本地视图</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <p>数据湖表维护与文件布局治理工作台</p>
+      <code>{{ lake_root }}</code>
+      <span class="hash">policy {{ policy_hash[:12] }}</span>
+    </section>
+
+    <section class="cards" id="summary-cards" aria-label="扫描摘要">
+      <div class="card skeleton">正在读取本地扫描结果…</div>
+    </section>
+
+    <div class="columns">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>诊断</h2>
+          <span id="diagnostic-count" class="pill">0</span>
+        </div>
+        <div id="diagnostics" class="list muted">加载中…</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>维护计划 <small>dry-run</small></h2>
+          <a href="/api/plan" target="_blank" rel="noopener">JSON</a>
+        </div>
+        <div id="plan-summary" class="muted">加载中…</div>
+        <div id="plan-actions" class="list"></div>
+      </section>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>表与分区</h2>
+        <a href="/api/tables" target="_blank" rel="noopener">JSON</a>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>表</th><th>分区</th><th>文件</th><th>小文件</th><th>字节</th><th>快照</th></tr>
+          </thead>
+          <tbody id="tables-body"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
+    <div class="columns">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>执行台账</h2>
+          <a href="/api/tasks" target="_blank" rel="noopener">JSON</a>
+        </div>
+        <div id="tasks" class="list muted">暂无任务</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>历史报告</h2>
+          <a href="/api/reports" target="_blank" rel="noopener">JSON</a>
+        </div>
+        <div id="reports" class="list muted">暂无报告</div>
+      </section>
+    </div>
+
+    <p class="note">
+      只读工作台：不提供在线策略编辑或执行按钮。维护动作通过本地 CLI
+      <code>scan / plan / apply / report</code> 完成。
+    </p>
+  </main>
+
+  <footer>Lakewatch · local files only · no network calls</footer>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
