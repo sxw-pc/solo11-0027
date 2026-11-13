@@ -42,6 +42,8 @@ CLI 入口（均不访问网络）：
 python -m lakewatch scan   --config configs/default.yaml
 python -m lakewatch scan   --config configs/default.yaml --json --out reports/scan.json
 python -m lakewatch plan   --config configs/default.yaml --out reports/plan.json
+python -m lakewatch simulate --config configs/default.yaml --plan reports/plan.json
+python -m lakewatch simulate --config configs/default.yaml --plan reports/plan.json --json --out reports/sim.json
 python -m lakewatch apply  --config configs/default.yaml --plan reports/plan.json
 python -m lakewatch report --config configs/default.yaml --json
 ```
@@ -49,6 +51,32 @@ python -m lakewatch report --config configs/default.yaml --json
 `apply --plan` 执行保存过的计划；同一个计划文件第二次执行会由 SQLite 台账识别为
 `already_completed` 并跳过全部动作。`apply --dry-run` 只打印计划，不写计划、报告或台账。
 `scan --strict` 在存在 `error` 级诊断时返回 1；正常扫描即使有诊断也返回 0。
+
+## 离线推演（simulate）
+
+`simulate` 是一个**完全独立、严格只读**的计划推演模块：输入一份已保存的计划文件与
+当前湖目录状态，在内存中按计划的确定性顺序重放全部动作，离线算出每个动作以及整体在
+**数据文件数、数据字节、清单条目、清单字节、快照数、快照字节、总字节、缺失项、孤儿项**
+九个计数器上的前后变化，产出稳定 JSON（`lakewatch.simulation/1`）和人读摘要。
+
+- **只读边界**：推演器位于 `lakewatch/simulator/`，只依赖 `catalog/`、`planner/` 与
+  `utils/` 的只读函数；静态禁止导入 `executor/` 与 `ledger/`，不打开 Parquet 内容
+  （仅 stat 与按需 SHA-256），不创建台账、报告或任何湖内文件，也不修改原计划文件。
+- **风险不崩溃**：输入文件缺失、字节数或内容哈希不符、清单失配、输出路径已存在、
+  快照已过期/被前置动作消费等情况，全部结构化为带稳定 `code` 的风险项
+  （`input_missing`、`input_bytes_mismatch`、`input_hash_mismatch`、
+  `input_already_consumed`、`output_already_exists`、`repair_path_reappeared`、
+  `vacuum_data_file_protected` 等），对应动作标 `would_fail`/`would_noop`，其余动作
+  继续推演，进程退出码仍为 0。
+- **确定性状态传递**：内存状态机镜像三个执行器的判定规则——compact 的字节守恒
+  （输出字节严格等于实际输入之和）、repair 的“文件重现则保留条目”、vacuum 删除前的
+  二次引用保护。被前置动作消费的文件从虚拟状态移除，后续动作再引用时记
+  `input_already_consumed` 且收益计零，同一文件不会被重复计入。
+- **验收对照**：提供 `scan_comparison` 块，使用与扫描摘要相同的字段名，可直接与 apply
+  后台账报告的 `before`/`after` 逐字段比对；在原始湖与已 apply 一半的湖上推演，投影的
+  最终状态都与真实执行结果一致。
+- `--strict` 在出现 `error`/`warning` 级风险时返回 1，便于接入审批门禁；`--out` 只写
+  用户显式指定的推演结果文件，默认不落盘。运行期不发起任何网络请求。
 
 ## 目录结构
 
@@ -58,6 +86,7 @@ lakewatch/                 Python 包
   scanners/                小文件/倾斜/一致性/过期快照扫描
   planner/                 策略校验与确定性计划
   executor/                合并、清理、修复与台账编排
+  simulator/               只读离线计划推演（独立于执行器写入路径）
   ledger/                  SQLite 台账与 schema 迁移
   reports/                 JSON / Markdown / HTML 片段报告
   web/                     本地 Flask 应用、模板与静态资源
@@ -156,7 +185,7 @@ policy:
 
 ## Web、CLI 与离线声明
 
-CLI 子命令：`scan`、`plan`、`apply`、`report`、`serve`。Web 只读展示当前扫描诊断、
+CLI 子命令：`scan`、`plan`、`simulate`、`apply`、`report`、`serve`。Web 只读展示当前扫描诊断、
 dry-run 计划、台账与历史报告，不提供策略编辑、审批或在线执行。主要端点：
 `/healthz`、`/api/tables`、`/api/plan`、`/api/tasks`、`/api/reports`、
 `/api/reports/<id>` 和 `/api/reports/<id>/download`。页面、CSS、JS 全部本地提供，无 CDN。

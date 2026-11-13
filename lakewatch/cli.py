@@ -13,6 +13,7 @@ from .ledger.db import Ledger
 from .planner.plan import PlanError, build_plan, load_plan, save_plan
 from .planner.policy import PolicyError
 from .scanners import scan_lake
+from .simulator import render_simulation_text, simulate_plan
 from .utils import LakewatchError, json_text
 
 EXIT_OK = 0
@@ -46,6 +47,21 @@ def _parser() -> argparse.ArgumentParser:
     report = sub.add_parser("report", help="show and re-render the latest report")
     _common(report)
     report.add_argument("--json", action="store_true", help="emit full report JSON")
+    simulate = sub.add_parser(
+        "simulate",
+        help="read-only what-if replay of a saved plan against the current lake",
+    )
+    _common(simulate)
+    simulate.add_argument(
+        "--plan", required=True, help="saved plan JSON to replay (never modified)"
+    )
+    simulate.add_argument("--json", action="store_true", help="emit stable JSON")
+    simulate.add_argument("--out", help="write simulation JSON to this file")
+    simulate.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 1 when the replay finds error- or warning-level risks",
+    )
     serve = sub.add_parser("serve", help="run the local read-only web UI")
     _common(serve)
     serve.add_argument("--host", help="override listen host")
@@ -150,9 +166,33 @@ def _report(cfg: AppConfig, args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _simulate(cfg: AppConfig, args: argparse.Namespace) -> int:
+    plan = load_plan(args.plan)
+    result = simulate_plan(
+        cfg.lake_root,
+        plan,
+        policy=cfg.policy,
+        plan_file=args.plan,
+    )
+    if args.out:
+        target = Path(args.out)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json_text(result), encoding="utf-8", newline="\n")
+    if args.json:
+        _print_json(result)
+    else:
+        sys.stdout.write(render_simulation_text(result))
+        sys.stdout.flush()
+    severities = result["summary"]["risks_by_severity"]
+    if args.strict and (
+        severities.get("error", 0) or severities.get("warning", 0)
+    ):
+        return EXIT_FAILED
+    return EXIT_OK
+
+
 def _serve(cfg: AppConfig, args: argparse.Namespace) -> int:
     from .web.app import create_app
-
     host = args.host or cfg.host
     port = args.port if args.port is not None else cfg.port
     if not isinstance(port, int) or not 1 <= port <= 65535:
@@ -175,6 +215,8 @@ def main(argv: list[str] | None = None) -> int:
             return _apply(cfg, args)
         if args.command == "report":
             return _report(cfg, args)
+        if args.command == "simulate":
+            return _simulate(cfg, args)
         if args.command == "serve":
             return _serve(cfg, args)
         parser.error(f"unknown command: {args.command}")
