@@ -6,3 +6,10 @@ reports/
 *.egg-info/
 build/
 dist/
+.venv/
+venv/
+node_modules/
+*.pyc
+.coverage
+.benchmarks/
+.env
