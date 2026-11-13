@@ -9,7 +9,7 @@ from typing import Any
 
 from .config import AppConfig, ConfigError, default_config_path, load_config
 from .executor import ApplyError, apply_plan
-from .ledger.db import Ledger
+from .ledger.db import Ledger, LedgerBusyError
 from .planner.plan import PlanError, build_plan, load_plan, save_plan
 from .planner.policy import PolicyError
 from .scanners import scan_lake
@@ -18,6 +18,8 @@ from .utils import LakewatchError, json_text
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_USAGE = 2
+# EX_TEMPFAIL: a transient condition (SQLite lock/timeout) the caller may retry.
+EXIT_BUSY = 75
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
@@ -181,6 +183,11 @@ def main(argv: list[str] | None = None) -> int:
     except ApplyError as exc:
         print(f"lakewatch: apply failed: {exc}", file=sys.stderr)
         return EXIT_FAILED
+    except LedgerBusyError as exc:
+        print(
+            f"lakewatch: ledger busy, retry shortly: {exc}", file=sys.stderr
+        )
+        return EXIT_BUSY
     except (ConfigError, PolicyError, PlanError, LakewatchError) as exc:
         print(f"lakewatch: error: {exc}", file=sys.stderr)
         return EXIT_USAGE

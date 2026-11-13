@@ -50,6 +50,24 @@ python -m lakewatch report --config configs/default.yaml --json
 `already_completed` 并跳过全部动作。`apply --dry-run` 只打印计划，不写计划、报告或台账。
 `scan --strict` 在存在 `error` 级诊断时返回 1；正常扫描即使有诊断也返回 0。
 
+### 并发 apply 与执行期认领
+
+两个进程（定时任务重叠、手动重跑撞车）同时执行同一份计划时，幂等只靠已完成记录会
+读到相同的「未完成」状态而重复动手。`apply` 因此在每个动作执行前先在台账里做一次
+**逐动作原子认领**（`action_claims` 表，schema v2）：
+
+- 认领是带心跳的**租约**而非永久锁：持有者按 TTL/3 频率续租；进程崩溃后停止心跳，
+  租约到期即被其他进程在同一条条件 UPSERT 里接管（`attempts` 自增、更换 `owner_id`，
+  不依赖 PID）。僵尸认领惰性回收，`Ledger.reap_stale_claims()` 提供显式清扫。
+- 抢不到认领的进程在有界等待（默认一个 TTL）内等待活持有者；超时仍被占用则跳过该动作，
+  结果中标注 `skip_reason=claim_held_by_other`，计划状态记为 `skipped_concurrent` 而非
+  伪装成 `completed`，保证后续重跑仍会补齐而非误判 `already_completed`。
+- 认领状态只存在于台账，不进入计划文件或 `plan_hash`；老库经现有 `migrate()` 平滑升级，
+  已有的 `already_completed` 行为不变。SQLite busy/超时统一归为可重试的
+  `LedgerBusyError`，CLI 返回临时失败退出码 75（`EX_TEMPFAIL`），不计为业务失败。
+- 租约参数可用 `apply_plan(..., lease_ttl_seconds=, wait_timeout_seconds=,
+  poll_interval_seconds=)` 或环境变量 `LAKEWATCH_CLAIM_TTL_SECONDS` 等覆盖。
+
 ## 目录结构
 
 ```text
