@@ -8,7 +8,7 @@ from typing import Any, Mapping
 
 import yaml
 
-from ..utils import LakewatchError, digest, iso_z, parse_utc
+from ..utils import LakewatchError, digest, iso_z, parse_utc, safe_relpath
 
 
 class PolicyError(LakewatchError):
@@ -28,6 +28,8 @@ OPTIONAL = {
     "compact_small_files": True,
     "vacuum_expired": True,
     "repair_missing": True,
+    "adopt_enabled": False,
+    "adopt_candidates": [],
     "tables": {},
 }
 TABLE_FIELDS = {
@@ -39,11 +41,24 @@ TABLE_FIELDS = {
     "compact_small_files",
     "vacuum_expired",
     "repair_missing",
+    "adopt_enabled",
+    "adopt_candidates",
     "retention",
     "enabled",
 }
 NONNEG = {"max_actions": 0, "compact_target_bytes": 1, "max_files_per_partition": 1,
           "max_files_listed": 1, "small_file_bytes": 1, "compact_max_inputs": 2}
+
+
+@dataclass(frozen=True)
+class AdoptCandidate:
+    """A single orphan file the operator explicitly asked to adopt."""
+
+    table: str
+    path: str
+
+    def as_dict(self) -> dict:
+        return {"table": self.table, "path": self.path}
 
 
 @dataclass(frozen=True)
@@ -56,6 +71,7 @@ class Settings:
     compact_small_files: bool
     vacuum_expired: bool
     repair_missing: bool
+    adopt_enabled: bool
     keep_last_snapshots: int
     keep_days: int
     enabled: bool
@@ -72,6 +88,8 @@ class Policy:
     compact_small_files: bool
     vacuum_expired: bool
     repair_missing: bool
+    adopt_enabled: bool
+    adopt_candidates: tuple[AdoptCandidate, ...]
     keep_last_snapshots: int
     keep_days: int
     as_of: datetime
@@ -88,6 +106,7 @@ class Policy:
             "compact_small_files": self.compact_small_files,
             "vacuum_expired": self.vacuum_expired,
             "repair_missing": self.repair_missing,
+            "adopt_enabled": self.adopt_enabled,
             "keep_last_snapshots": self.keep_last_snapshots,
             "keep_days": self.keep_days,
             "enabled": True,
@@ -97,6 +116,12 @@ class Policy:
         base.update(override)
         base.update(retention)
         return Settings(**base)
+
+    def candidates_for(self, table: str) -> tuple[str, ...]:
+        """Return the explicitly declared adopt paths for one table."""
+        return tuple(sorted({
+            item.path for item in self.adopt_candidates if item.table == table
+        }))
 
     @property
     def as_of_iso(self) -> str:
@@ -117,6 +142,10 @@ class Policy:
             "compact_small_files": self.compact_small_files,
             "vacuum_expired": self.vacuum_expired,
             "repair_missing": self.repair_missing,
+            "adopt_enabled": self.adopt_enabled,
+            "adopt_candidates": [
+                item.as_dict() for item in self.adopt_candidates
+            ],
             "retention": {
                 "keep_last_snapshots": self.keep_last_snapshots,
                 "keep_days": self.keep_days,
@@ -152,6 +181,8 @@ class Policy:
         _check_bool(values, "compact_small_files")
         _check_bool(values, "vacuum_expired")
         _check_bool(values, "repair_missing")
+        _check_bool(values, "adopt_enabled")
+        candidates = _normalize_candidates(values["adopt_candidates"], "adopt_candidates")
         retention = values["retention"]
         if not isinstance(retention, Mapping):
             raise PolicyError("retention must be a mapping")
@@ -182,6 +213,15 @@ class Policy:
         if not isinstance(tables, Mapping):
             raise PolicyError("tables must be a mapping")
         overrides = _normalize_overrides(tables)
+        # Table-level candidate declarations are merged into the flat list.
+        table_candidates = []
+        for table, item in overrides.items():
+            for rel in item.get("adopt_candidates", []):
+                table_candidates.append(AdoptCandidate(table=table, path=rel))
+        merged = sorted(
+            set(candidates) | set(table_candidates),
+            key=lambda entry: (entry.table, entry.path),
+        )
         return cls(
             small_file_bytes=values["small_file_bytes"],
             max_files_per_partition=values["max_files_per_partition"],
@@ -192,6 +232,8 @@ class Policy:
             compact_small_files=values["compact_small_files"],
             vacuum_expired=values["vacuum_expired"],
             repair_missing=values["repair_missing"],
+            adopt_enabled=values["adopt_enabled"],
+            adopt_candidates=tuple(merged),
             keep_last_snapshots=keep_last,
             keep_days=keep_days,
             as_of=as_of,
@@ -238,6 +280,57 @@ def _check_bool(values: Mapping, key: str) -> None:
         raise PolicyError(f"{key} must be a boolean")
 
 
+def _normalize_candidates(raw: Any, field: str,
+                           default_table: str | None = None) -> set[AdoptCandidate]:
+    """Validate explicit adopt declarations: a list of table/path objects.
+
+    Accepts ``[{"table": "events", "path": "region=east/part.parquet"}]`` and the
+    shorthand string ``"events:region=east/part.parquet"``.  Inside a table
+    override the table name is implied, so a bare relative path is also accepted.
+    Nothing is inferred: files that are not named here are never adopted.
+    """
+    if raw is None:
+        return set()
+    if not isinstance(raw, (list, tuple)):
+        raise PolicyError(f"{field} must be a list")
+    result: set[AdoptCandidate] = set()
+    for index, entry in enumerate(raw):
+        table: Any = None
+        path: Any = None
+        if isinstance(entry, str):
+            if ":" in entry:
+                table, path = entry.split(":", 1)
+            elif default_table is not None:
+                table, path = default_table, entry
+            else:
+                raise PolicyError(
+                    f"{field}[{index}] must be 'table:path' or a mapping"
+                )
+        elif isinstance(entry, Mapping):
+            unknown = set(entry) - {"table", "path"}
+            if unknown:
+                raise PolicyError(
+                    f"{field}[{index}] has unknown field(s): "
+                    + ", ".join(sorted(unknown))
+                )
+            table = entry.get("table", default_table)
+            path = entry.get("path")
+        else:
+            raise PolicyError(
+                f"{field}[{index}] must be a mapping with table/path or a string"
+            )
+        if not isinstance(table, str) or not table.strip():
+            raise PolicyError(f"{field}[{index}].table must be a non-empty string")
+        try:
+            rel = safe_relpath(path)
+        except LakewatchError as exc:
+            raise PolicyError(f"{field}[{index}].path: {exc}") from exc
+        if not rel.endswith(".parquet"):
+            raise PolicyError(f"{field}[{index}].path must end with .parquet")
+        result.add(AdoptCandidate(table=table.strip(), path=rel))
+    return result
+
+
 def _normalize_overrides(tables: Mapping) -> dict[str, dict]:
     normalized: dict[str, dict] = {}
     for table, raw in sorted(tables.items()):
@@ -274,8 +367,17 @@ def _normalize_overrides(tables: Mapping) -> dict[str, dict]:
                     "compact_target_bytes", "compact_max_inputs"):
             if key in item and (not _is_int(item[key]) or item[key] < NONNEG[key]):
                 raise PolicyError(f"table {table} {key} must be >= {NONNEG[key]}")
-        for key in ("compact_small_files", "vacuum_expired", "repair_missing", "enabled"):
+        for key in ("compact_small_files", "vacuum_expired", "repair_missing",
+                    "adopt_enabled", "enabled"):
             if key in item and not isinstance(item[key], bool):
                 raise PolicyError(f"table {table} {key} must be a boolean")
+        if "adopt_candidates" in item:
+            clean_paths = sorted(
+                entry.path
+                for entry in _normalize_candidates(
+                    item["adopt_candidates"],
+                    f"tables.{table}.adopt_candidates", default_table=table)
+            )
+            item["adopt_candidates"] = clean_paths
         normalized[table] = item
     return normalized

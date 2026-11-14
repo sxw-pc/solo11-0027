@@ -32,7 +32,7 @@ def scan_lake(root: Path | str, policy: Policy) -> ScanResult:
         root_path, layouts, manifests, snapshots, policy
     )
     consistency, consistency_diagnostics = check_consistency(
-        tables, manifests, snapshots, policy
+        root_path, tables, manifests, snapshots, policy
     )
     snapshot_report = scan_snapshots(
         root_path, tables, snapshots, manifests, policy

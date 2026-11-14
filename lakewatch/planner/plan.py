@@ -10,7 +10,7 @@ from ..utils import LakewatchError, digest, json_text
 from .policy import Policy
 
 PLAN_FORMAT = "lakewatch.plan/1"
-KIND_ORDER = {"repair": 0, "compact": 1, "vacuum": 2}
+KIND_ORDER = {"adopt": 0, "repair": 1, "compact": 2, "vacuum": 3}
 
 
 class PlanError(LakewatchError):
@@ -18,17 +18,19 @@ class PlanError(LakewatchError):
 
 
 def _input_hash(inputs: list[dict]) -> str:
-    return digest(
-        [
-            {
-                "path": item["path"],
-                "bytes": item["bytes"],
-                "rows": item.get("rows", 0),
-                "sha256": item.get("sha256"),
-            }
-            for item in inputs
-        ]
-    )
+    payload = []
+    for item in inputs:
+        entry = {
+            "path": item["path"],
+            "bytes": item["bytes"],
+            "rows": item.get("rows", 0),
+            "sha256": item.get("sha256"),
+        }
+        # Adopted files also pin their schema; other kinds keep their old hash.
+        if item.get("schema") is not None:
+            entry["schema"] = item["schema"]
+        payload.append(entry)
+    return digest(payload)
 
 
 def _finish(kind: str, table: str, partition: str, reason: str,
@@ -187,6 +189,67 @@ def _vacuum_actions(scan: ScanResult, policy: Policy) -> list[dict]:
     return actions
 
 
+def _adopt_actions(scan: ScanResult, policy: Policy) -> list[dict]:
+    """Turn explicitly declared, verified candidates into one adopt action.
+
+    The candidate set comes exclusively from the policy's declarations.  A
+    candidate that failed any ownership/layout/parquet check is silently absent
+    here (the scan already emitted an ``adopt_candidate_rejected`` diagnostic).
+    All candidates for a table share a single atomic manifest update so the
+    generation pinned by the plan stays meaningful during apply.
+    """
+    actions = []
+    for table in scan.tables:
+        name = table["name"]
+        settings = policy.settings(name)
+        if not settings.enabled or not settings.adopt_enabled:
+            continue
+        manifest = scan.manifests.get(name)
+        if manifest is None:
+            continue
+        adoption = scan.consistency.get(name, {}).get("adoption") or {}
+        eligible = [
+            item for item in adoption.get("eligible", [])
+            if item["manifest_generation"] == manifest.generation
+        ]
+        if not eligible:
+            continue
+        inputs = [
+            {
+                "path": item["path"],
+                "bytes": item["bytes"],
+                "rows": item["rows"],
+                "sha256": item["sha256"],
+                "schema": item["schema"],
+            }
+            for item in eligible
+        ]
+        candidates = [
+            {
+                "path": item["path"],
+                "partition": item["partition"],
+                "bytes": item["bytes"],
+                "rows": item["rows"],
+                "sha256": item["sha256"],
+                "schema": item["schema"],
+            }
+            for item in eligible
+        ]
+        expected = {
+            "candidates": candidates,
+            "partition_keys": list(table.get("partition_keys") or []),
+            "manifest_generation": manifest.generation,
+            "next_generation": manifest.generation + 1,
+            "entry_count_after": len(manifest.files) + len(candidates),
+        }
+        reason = (
+            f"adopt {len(candidates)} explicitly declared orphan file(s): "
+            + ", ".join(item["path"] for item in candidates)
+        )
+        actions.append(_finish("adopt", name, "", reason, inputs, expected))
+    return actions
+
+
 def hash_payload(plan: dict) -> dict:
     return {
         "format": plan["format"],
@@ -209,6 +272,7 @@ def build_plan(scan: ScanResult, policy: Policy, max_actions: int | None = None)
             candidates.extend(
                 _compaction_actions(table, policy, manifest.paths)
             )
+    candidates.extend(_adopt_actions(scan, policy))
     candidates.extend(_repair_actions(scan, policy))
     candidates.extend(_vacuum_actions(scan, policy))
     candidates.sort(
@@ -243,6 +307,9 @@ def _summary(actions: list[dict], candidates: list[dict], limit: int) -> dict:
         "compaction_input_files": sum(
             len(item["inputs"]) for item in actions if item["kind"] == "compact"
         ),
+        "adopted_files": sum(
+            1 for item in actions if item["kind"] == "adopt"
+        ),
         "expected_released_bytes": sum(
             item["expected"].get("released_bytes", 0)
             for item in actions
@@ -272,6 +339,32 @@ def validate_plan(plan: Any) -> dict:
             raise PlanError("plan contains an invalid action")
         if "action_id" not in item or "inputs" not in item or "expected" not in item:
             raise PlanError("plan action is missing action_id/inputs/expected")
+        if item["kind"] == "adopt":
+            expected = item["expected"]
+            required = {"candidates", "manifest_generation", "partition_keys"}
+            if not isinstance(expected, dict) or required - set(expected):
+                raise PlanError("adopt action is missing its candidate description")
+            if not isinstance(expected["partition_keys"], list):
+                raise PlanError("adopt action partition_keys must be a list")
+            candidates = expected["candidates"]
+            if not isinstance(candidates, list) or not candidates:
+                raise PlanError("adopt action must describe at least one candidate")
+            fields = {"path", "sha256", "schema", "rows", "bytes",
+                      "partition"}
+            described = {}
+            for candidate in candidates:
+                if not isinstance(candidate, dict) or fields - set(candidate):
+                    raise PlanError("adopt candidate description is incomplete")
+                described[candidate["path"]] = candidate
+            if set(described) != {item["path"] for item in item["inputs"]}:
+                raise PlanError("adopt inputs and candidate descriptions differ")
+            for entry in item["inputs"]:
+                candidate = described[entry["path"]]
+                if (entry.get("sha256") != candidate["sha256"]
+                        or entry.get("schema") != candidate["schema"]
+                        or entry.get("bytes") != candidate["bytes"]
+                        or entry.get("rows") != candidate["rows"]):
+                    raise PlanError("adopt action candidate description is inconsistent")
     actual = compute_plan_hash(plan)
     if actual != plan["plan_hash"]:
         raise PlanError("plan hash does not match plan contents")

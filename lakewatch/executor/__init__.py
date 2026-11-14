@@ -9,11 +9,13 @@ from typing import Any
 from ..ledger.db import Ledger
 from ..planner.plan import validate_plan
 from ..utils import LakewatchError, digest
+from .adopt import execute_adoption
 from .compact import execute_compaction
 from .repair import execute_repair
 from .vacuum import execute_vacuum
 
 EXECUTORS = {
+    "adopt": execute_adoption,
     "compact": execute_compaction,
     "repair": execute_repair,
     "vacuum": execute_vacuum,

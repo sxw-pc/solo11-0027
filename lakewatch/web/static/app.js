@@ -92,7 +92,7 @@
         "p",
         `计划 ${plan.plan_hash.slice(0, 16)}… · ${summary.action_count} 个动作 · ` +
           `compact ${summary.by_kind.compact} / repair ${summary.by_kind.repair} / ` +
-          `vacuum ${summary.by_kind.vacuum}`
+          `vacuum ${summary.by_kind.vacuum} / adopt ${summary.by_kind.adopt || 0}`
       )
     );
     container.append(el("p", `预计释放 ${formatBytes(summary.expected_released_bytes)}`, "muted"));

@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import pyarrow.parquet as pq
+
 from ..utils import (
     LakewatchError,
     atomic_write_text,
@@ -27,11 +29,16 @@ class ManifestFile:
     bytes: int
     rows: int
     sha256: str | None = None
+    # Only populated for files adopted from an orphan; regular entries keep the
+    # existing on-disk manifest shape byte-for-byte.
+    schema: str | None = None
 
     def as_dict(self) -> dict:
         value = {"path": self.path, "bytes": self.bytes, "rows": self.rows}
         if self.sha256:
             value["sha256"] = self.sha256
+        if self.schema:
+            value["schema"] = self.schema
         return value
 
 
@@ -96,13 +103,20 @@ def parse_files(table: str, values: Any, source: str) -> tuple[tuple[ManifestFil
                 "manifest_invalid", "error", table, "",
                 f"{source} entry {rel} has invalid sha256", files=[rel]))
             sha = None
+        schema = raw.get("schema")
+        if schema is not None and (not isinstance(schema, str) or not schema.strip()):
+            issues.append(make_issue(
+                "manifest_invalid", "error", table, "",
+                f"{source} entry {rel} has invalid schema", files=[rel]))
+            schema = None
         if rel in seen:
             issues.append(make_issue(
                 "manifest_duplicate_file", "error", table, "",
                 f"{source} lists {rel} more than once", files=[rel]))
             continue
         seen.add(rel)
-        files.append(ManifestFile(path=rel, bytes=size, rows=rows, sha256=sha))
+        files.append(ManifestFile(path=rel, bytes=size, rows=rows, sha256=sha,
+                                  schema=schema))
     files.sort(key=lambda item: item.path)
     return tuple(files), issues
 
@@ -138,11 +152,36 @@ def write_manifest(table_dir: Path, manifest: Manifest) -> None:
     atomic_write_text(manifest.path, json_text(manifest.as_dict()))
 
 
-def file_descriptor(table_dir: Path, rel_path: str, rows: int) -> ManifestFile:
+def file_descriptor(
+    table_dir: Path, rel_path: str, rows: int, schema: str | None = None
+) -> ManifestFile:
     rel = safe_relpath(rel_path)
     path = table_dir / Path(rel)
     return ManifestFile(
-        path=rel, bytes=path.stat().st_size, rows=rows, sha256=sha256_file(path)
+        path=rel, bytes=path.stat().st_size, rows=rows, sha256=sha256_file(path),
+        schema=schema,
+    )
+
+
+def parquet_descriptor(table_dir: Path, rel_path: str) -> ManifestFile:
+    """Describe a candidate data file, refusing anything pyarrow cannot open.
+
+    Adoption uses this so the recorded rows/schema/sha are derived from the
+    file itself rather than from the planner's cached scan result.
+    """
+    rel = safe_relpath(rel_path)
+    path = table_dir / Path(rel)
+    if not path.is_file():
+        raise LakewatchError(f"candidate file is missing: {rel}")
+    try:
+        parquet = pq.ParquetFile(path)
+        rows = int(parquet.metadata.num_rows)
+        schema = parquet.schema_arrow.to_string()
+    except Exception as exc:  # pyarrow raises several backend-specific errors
+        raise LakewatchError(f"candidate is not valid parquet: {rel}: {exc}") from exc
+    return ManifestFile(
+        path=rel, bytes=path.stat().st_size, rows=rows,
+        sha256=sha256_file(path), schema=schema,
     )
 
 
