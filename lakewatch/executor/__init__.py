@@ -126,18 +126,23 @@ def apply_plan(
             output_hash = result.get("output_hash") or digest(result)
             ledger.complete_task(task_id, output_hash, elapsed, result)
             completed += 1
-            outcomes.append(
-                {
-                    "action_id": action["action_id"],
-                    "kind": action["kind"],
-                    "table": action["table"],
-                    "partition": action.get("partition", ""),
-                    "status": "completed",
-                    "output_hash": output_hash,
-                    "duration_ms": round(elapsed, 3),
-                    "result": result,
-                }
-            )
+            outcome = {
+                "action_id": action["action_id"],
+                "kind": action["kind"],
+                "table": action["table"],
+                "partition": action.get("partition", ""),
+                "status": "completed",
+                "output_hash": output_hash,
+                "duration_ms": round(elapsed, 3),
+                "result": result,
+            }
+            if action["kind"] == "compact":
+                # Surface the content-conservation verdict next to the task
+                # ledger record (the full proof is in result["content_check"]).
+                outcome["content_check"] = (
+                    result.get("content_check") or {}
+                ).get("status")
+            outcomes.append(outcome)
     except ApplyError:
         raise
     except Exception as exc:
