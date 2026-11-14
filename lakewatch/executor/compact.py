@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from ..catalog.manifest import Manifest, file_descriptor, load_manifest, write_manifest
@@ -27,6 +28,78 @@ from ..utils import (
 
 class CompactionError(LakewatchError):
     """Raised when a compaction cannot safely complete."""
+
+
+def _orderable(data_type: pa.DataType) -> bool:
+    checks = (
+        pa.types.is_boolean, pa.types.is_integer, pa.types.is_floating,
+        pa.types.is_decimal, pa.types.is_string, pa.types.is_large_string,
+        pa.types.is_binary, pa.types.is_large_binary,
+        pa.types.is_date32, pa.types.is_date64, pa.types.is_timestamp,
+        pa.types.is_time32, pa.types.is_time64, pa.types.is_duration,
+    )
+    return any(check(data_type) for check in checks)
+
+
+def _helper_name(existing: set[str], stem: str) -> str:
+    name = stem
+    while name in existing:
+        name = "_" + name
+    existing.add(name)
+    return name
+
+
+def _cluster_table(table: pa.Table, columns: list[dict]) -> pa.Table:
+    """Reorder rows by the saved cluster contract, deterministically.
+
+    Every sort column is validated before anything is written.  NULL placement
+    is realized with explicit indicator columns so each key can place NULLs
+    first or last independently.  A monotonic sequence over the plan-ordered
+    concatenation is appended as the final tie-break, so equal keys keep every
+    row and the full output order is reproducible regardless of how the input
+    files were enumerated on disk.
+    """
+    existing = set(table.column_names)
+    helpers: list[str] = []
+    sort_keys: list[tuple[str, str]] = []
+    augmented = table
+    for index, spec in enumerate(columns):
+        name = spec["name"]
+        if name not in table.column_names:
+            raise CompactionError(f"cluster sort column is not in the schema: {name}")
+        column = augmented.column(name)
+        if pa.types.is_dictionary(column.type):
+            column = column.dictionary_decode()
+            field_index = augmented.schema.get_field_index(name)
+            augmented = augmented.set_column(
+                field_index,
+                augmented.schema.field(field_index).with_type(column.type),
+                column,
+            )
+        data_type = augmented.column(name).type
+        if not _orderable(data_type):
+            raise CompactionError(
+                f"cluster sort column {name} has non-orderable type {data_type}"
+            )
+        null_name = _helper_name(existing, f"__lakewatch_cluster_null_{index}")
+        augmented = augmented.append_column(
+            null_name, pc.is_null(augmented.column(name))
+        )
+        helpers.append(null_name)
+        sort_keys.append(
+            (null_name, "descending" if spec["nulls"] == "first" else "ascending")
+        )
+        sort_keys.append(
+            (name, "ascending" if spec["direction"] == "asc" else "descending")
+        )
+    seq_name = _helper_name(existing, "__lakewatch_cluster_seq")
+    augmented = augmented.append_column(
+        seq_name, pa.array(range(augmented.num_rows), pa.int64())
+    )
+    helpers.append(seq_name)
+    sort_keys.append((seq_name, "ascending"))
+    order = pc.sort_indices(augmented, sort_keys=sort_keys)
+    return augmented.take(order).drop(helpers)
 
 
 def _read_inputs(table_dir: Path, inputs: list[dict]) -> tuple[list[dict], pa.Table]:
@@ -104,6 +177,10 @@ def execute_compaction(root: Path, action: dict) -> dict:
                 f"compaction input is not in the current manifest: {item['path']}"
             )
     verified, combined = _read_inputs(table_dir, action["inputs"])
+    cluster = action.get("cluster")
+    if cluster is not None:
+        # Replay the exact contract stored in the plan; never re-derive it.
+        combined = _cluster_table(combined, cluster["columns"])
     output = action["expected"]["output_path"]
     if "/" not in output:
         output_dir = table_dir

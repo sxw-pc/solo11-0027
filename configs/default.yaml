@@ -23,5 +23,11 @@ policy:
     orders:
       max_files_per_partition: 8
       compact_max_inputs: 8
+      # Opt-in clustered merge: an explicit per-column sort contract that is
+      # hashed into action_id/plan_hash and replayed verbatim at apply time.
+      # cluster:
+      #   columns:
+      #     - {name: quantity, direction: desc, nulls: first}
+      #     - {name: id, direction: asc, nulls: last}
     events:
       max_files_listed: 6

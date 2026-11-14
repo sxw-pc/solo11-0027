@@ -7,7 +7,7 @@ from typing import Any
 
 from ..scanners import ScanResult
 from ..utils import LakewatchError, digest, json_text
-from .policy import Policy
+from .policy import Policy, PolicyError, normalize_cluster
 
 PLAN_FORMAT = "lakewatch.plan/1"
 KIND_ORDER = {"repair": 0, "compact": 1, "vacuum": 2}
@@ -32,7 +32,7 @@ def _input_hash(inputs: list[dict]) -> str:
 
 
 def _finish(kind: str, table: str, partition: str, reason: str,
-            inputs: list[dict], expected: dict) -> dict:
+            inputs: list[dict], expected: dict, cluster: dict | None = None) -> dict:
     core = {
         "kind": kind,
         "table": table,
@@ -42,6 +42,10 @@ def _finish(kind: str, table: str, partition: str, reason: str,
         "expected": expected,
         "input_hash": _input_hash(inputs),
     }
+    if cluster is not None:
+        # The explicit sort contract is part of the action identity: it feeds
+        # action_id and therefore the overall plan_hash.
+        core["cluster"] = cluster
     core["action_id"] = f"{kind}-{digest(core)[:16]}"
     return core
 
@@ -68,6 +72,9 @@ def _compaction_actions(table: dict, policy: Policy, manifest_paths: set[str]) -
     settings = policy.settings(table["name"])
     if not settings.enabled or not settings.compact_small_files:
         return []
+    cluster = None
+    if settings.cluster is not None:
+        cluster = {"columns": [column.as_dict() for column in settings.cluster]}
     actions = []
     files_by_path = {item["path"]: item for item in table["files"]}
     for partition in table["partitions"]:
@@ -113,10 +120,16 @@ def _compaction_actions(table: dict, policy: Policy, manifest_paths: set[str]) -
                 f"merge {len(inputs)} small files ({total_bytes} bytes) below "
                 f"{settings.small_file_bytes}-byte threshold"
             )
+            if cluster is not None:
+                keys = ", ".join(
+                    f"{item['name']} {item['direction']} nulls {item['nulls']}"
+                    for item in cluster["columns"]
+                )
+                reason = f"{reason}; cluster by {keys}"
             actions.append(
                 _finish(
                     "compact", table["name"], partition["name"], reason,
-                    inputs, expected
+                    inputs, expected, cluster=cluster
                 )
             )
     return actions
@@ -272,6 +285,15 @@ def validate_plan(plan: Any) -> dict:
             raise PlanError("plan contains an invalid action")
         if "action_id" not in item or "inputs" not in item or "expected" not in item:
             raise PlanError("plan action is missing action_id/inputs/expected")
+        if "cluster" in item:
+            try:
+                contract = normalize_cluster(
+                    item["cluster"], f"action {item.get('action_id')} cluster"
+                )
+            except PolicyError as exc:
+                raise PlanError(str(exc)) from exc
+            if contract != item["cluster"]:
+                raise PlanError("plan cluster contract is not in canonical form")
     actual = compute_plan_hash(plan)
     if actual != plan["plan_hash"]:
         raise PlanError("plan hash does not match plan contents")

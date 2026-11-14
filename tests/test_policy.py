@@ -74,3 +74,72 @@ def test_policy_yaml_loader(tmp_path, policy):
     assert loaded.policy_hash == policy.policy_hash
     with pytest.raises(PolicyError):
         Policy.from_yaml(tmp_path / "missing.yaml")
+
+
+def _with_cluster(policy, columns, table="orders"):
+    payload = _base(policy)
+    payload["tables"].setdefault(table, {})["cluster"] = {"columns": columns}
+    return payload
+
+
+def test_cluster_contract_is_parsed_and_hashed(policy):
+    columns = [
+        {"name": "quantity", "direction": "desc", "nulls": "first"},
+        {"name": "amount", "direction": "asc", "nulls": "last"},
+    ]
+    parsed = Policy.from_dict(_with_cluster(policy, columns))
+    cluster = parsed.settings("orders").cluster
+    assert [item.as_dict() for item in cluster] == columns
+    assert parsed.settings("events").cluster is None
+    assert parsed.policy_hash != policy.policy_hash
+    clone = Policy.from_dict(parsed.to_dict())
+    assert clone.policy_hash == parsed.policy_hash
+    assert [item.as_dict() for item in clone.settings("orders").cluster] == columns
+
+
+def test_cluster_contract_rejects_invalid_values(policy):
+    bad_direction = _with_cluster(
+        policy, [{"name": "quantity", "direction": "up", "nulls": "first"}]
+    )
+    with pytest.raises(PolicyError, match="direction"):
+        Policy.from_dict(bad_direction)
+
+    bad_nulls = _with_cluster(
+        policy, [{"name": "quantity", "direction": "asc", "nulls": "middle"}]
+    )
+    with pytest.raises(PolicyError, match="nulls"):
+        Policy.from_dict(bad_nulls)
+
+    missing_nulls = _with_cluster(policy, [{"name": "quantity", "direction": "asc"}])
+    with pytest.raises(PolicyError, match="missing"):
+        Policy.from_dict(missing_nulls)
+
+    duplicate = _with_cluster(
+        policy,
+        [
+            {"name": "quantity", "direction": "asc", "nulls": "first"},
+            {"name": "quantity", "direction": "desc", "nulls": "last"},
+        ],
+    )
+    with pytest.raises(PolicyError, match="more than once"):
+        Policy.from_dict(duplicate)
+
+    empty = _with_cluster(policy, [])
+    with pytest.raises(PolicyError, match="non-empty"):
+        Policy.from_dict(empty)
+
+    payload = _base(policy)
+    payload["tables"]["orders"]["cluster"] = {"columns": [{"name": "q"}]}
+    with pytest.raises(PolicyError, match="missing"):
+        Policy.from_dict(payload)
+
+    payload = _base(policy)
+    payload["tables"]["orders"]["cluster"] = "quantity"
+    with pytest.raises(PolicyError, match="mapping"):
+        Policy.from_dict(payload)
+
+    payload = _with_cluster(
+        policy, [{"name": "q", "direction": "asc", "nulls": "first", "extra": 1}]
+    )
+    with pytest.raises(PolicyError, match="unknown field"):
+        Policy.from_dict(payload)

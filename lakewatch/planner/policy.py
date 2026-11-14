@@ -41,9 +41,24 @@ TABLE_FIELDS = {
     "repair_missing",
     "retention",
     "enabled",
+    "cluster",
 }
+CLUSTER_DIRECTIONS = ("asc", "desc")
+CLUSTER_NULLS = ("first", "last")
 NONNEG = {"max_actions": 0, "compact_target_bytes": 1, "max_files_per_partition": 1,
           "max_files_listed": 1, "small_file_bytes": 1, "compact_max_inputs": 2}
+
+
+@dataclass(frozen=True)
+class ClusterColumn:
+    """One explicit sort-key entry of a clustered-compaction contract."""
+
+    name: str
+    direction: str
+    nulls: str
+
+    def as_dict(self) -> dict:
+        return {"name": self.name, "direction": self.direction, "nulls": self.nulls}
 
 
 @dataclass(frozen=True)
@@ -59,6 +74,7 @@ class Settings:
     keep_last_snapshots: int
     keep_days: int
     enabled: bool
+    cluster: tuple[ClusterColumn, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -94,8 +110,13 @@ class Policy:
         }
         override = dict(self.table_overrides.get(table, {}))
         retention = override.pop("retention", {})
+        cluster = override.pop("cluster", None)
         base.update(override)
         base.update(retention)
+        if cluster is not None:
+            base["cluster"] = tuple(
+                ClusterColumn(**entry) for entry in cluster["columns"]
+            )
         return Settings(**base)
 
     @property
@@ -238,6 +259,57 @@ def _check_bool(values: Mapping, key: str) -> None:
         raise PolicyError(f"{key} must be a boolean")
 
 
+def normalize_cluster(raw: Any, context: str) -> dict:
+    """Validate an explicit clustered-merge contract into its canonical form.
+
+    The contract is fully explicit: every column must name its sort direction
+    and NULL placement, so the planner, the saved plan, and the executor all
+    operate on byte-identical semantics.
+    """
+    if not isinstance(raw, Mapping):
+        raise PolicyError(f"{context} must be a mapping")
+    unknown = set(raw) - {"columns"}
+    if unknown:
+        raise PolicyError(f"{context} has unknown field(s): {', '.join(sorted(unknown))}")
+    columns = raw.get("columns")
+    if not isinstance(columns, list) or not columns:
+        raise PolicyError(f"{context}.columns must be a non-empty list")
+    seen: set[str] = set()
+    normalized = []
+    for index, entry in enumerate(columns):
+        where = f"{context}.columns[{index}]"
+        if not isinstance(entry, Mapping):
+            raise PolicyError(f"{where} must be a mapping")
+        unknown_entry = set(entry) - {"name", "direction", "nulls"}
+        if unknown_entry:
+            raise PolicyError(
+                f"{where} has unknown field(s): {', '.join(sorted(unknown_entry))}"
+            )
+        missing = {"name", "direction", "nulls"} - set(entry)
+        if missing:
+            raise PolicyError(
+                f"{where} is missing field(s): {', '.join(sorted(missing))}"
+            )
+        name = entry["name"]
+        if not isinstance(name, str) or not name.strip():
+            raise PolicyError(f"{where}.name must be a non-empty string")
+        if name in seen:
+            raise PolicyError(f"{context} lists column {name!r} more than once")
+        seen.add(name)
+        direction = entry["direction"]
+        if direction not in CLUSTER_DIRECTIONS:
+            raise PolicyError(
+                f"{where}.direction must be one of {', '.join(CLUSTER_DIRECTIONS)}"
+            )
+        nulls = entry["nulls"]
+        if nulls not in CLUSTER_NULLS:
+            raise PolicyError(
+                f"{where}.nulls must be one of {', '.join(CLUSTER_NULLS)}"
+            )
+        normalized.append({"name": name, "direction": direction, "nulls": nulls})
+    return {"columns": normalized}
+
+
 def _normalize_overrides(tables: Mapping) -> dict[str, dict]:
     normalized: dict[str, dict] = {}
     for table, raw in sorted(tables.items()):
@@ -277,5 +349,7 @@ def _normalize_overrides(tables: Mapping) -> dict[str, dict]:
         for key in ("compact_small_files", "vacuum_expired", "repair_missing", "enabled"):
             if key in item and not isinstance(item[key], bool):
                 raise PolicyError(f"table {table} {key} must be a boolean")
+        if "cluster" in item:
+            item["cluster"] = normalize_cluster(item["cluster"], f"table {table} cluster")
         normalized[table] = item
     return normalized
